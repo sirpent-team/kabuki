@@ -1,11 +1,7 @@
-extern crate futures;
-extern crate futures_spawn;
-extern crate kabuki;
-
 use futures::{Async, AsyncSink, Future, IntoFuture, Sink, Stream, future};
 use futures::future::FutureResult;
 use futures_spawn::Spawn;
-use kabuki::Actor;
+use super::*;
 use std::{fmt, iter};
 
 pub trait FutureErrorLogger<I> {
@@ -63,8 +59,8 @@ pub trait AskActor {
               FS: From<futures::sync::oneshot::Sender<A>>;
 }
 
-impl<T: 'static, E: 'static> AskActor for kabuki::ActorRef<T, (), E>
-    where E: From<futures::Canceled> + From<kabuki::CallError<T>>,
+impl<T: 'static, E: 'static> AskActor for ActorRef<T, (), E>
+    where E: From<futures::Canceled> + From<CallError<T>>,
 {
     type Request = T;
     type Error = E;
@@ -81,8 +77,8 @@ impl<T: 'static, E: 'static> AskActor for kabuki::ActorRef<T, (), E>
     }
 }
 
-fn ready_to_end(state: kabuki::ActorState) -> Async<()> {
-    if state == kabuki::ActorState::Listening {
+fn ready_to_end(state: ActorState) -> Async<()> {
+    if state == ActorState::Listening {
         Async::NotReady
     } else {
         Async::Ready(())
@@ -108,10 +104,10 @@ impl<S: 'static> SinkActor<S>
         SinkActor(sink)
     }
 
-    pub fn spawn_default<SP>(spawn: &SP, sink: S) -> kabuki::ActorRef<S::SinkItem, (), S::SinkError>
-        where SP: Spawn<kabuki::ActorCell<Self, ()>>,
+    pub fn spawn_default<SP>(spawn: &SP, sink: S) -> ActorRef<S::SinkItem, (), S::SinkError>
+        where SP: Spawn<ActorCell<Self, ()>>,
     {
-        kabuki::Builder::new().spawn(spawn, SinkActor::new(sink))
+        Builder::new().spawn(spawn, SinkActor::new(sink))
     }
 }
 
@@ -135,7 +131,7 @@ impl<S: 'static> SinkActor<S>
     }
 }
 
-impl<S: 'static> kabuki::Actor for SinkActor<S>
+impl<S: 'static> Actor for SinkActor<S>
     where S: Sink,
           S::SinkError: fmt::Debug + From<SinkFull<S::SinkItem>>,
 {
@@ -148,7 +144,7 @@ impl<S: 'static> kabuki::Actor for SinkActor<S>
         future::result(self.enqueue(item))
     }
 
-    fn poll(&mut self, state: kabuki::ActorState) -> Async<()> {
+    fn poll(&mut self, state: ActorState) -> Async<()> {
         least_ready(self.poll_sink(), ready_to_end(state))
     }
 
@@ -161,8 +157,8 @@ pub trait MultiCall<T, U, E> {
     fn call_all(&mut self, requests: Vec<T>) -> Box<Future<Item = Vec<U>, Error = E>>;
 }
 
-impl<T: 'static, U: 'static, E: 'static> MultiCall<T, U, E> for kabuki::ActorRef<T, U, E>
-    where E: From<kabuki::CallError<T>>,
+impl<T: 'static, U: 'static, E: 'static> MultiCall<T, U, E> for ActorRef<T, U, E>
+    where E: From<CallError<T>>,
 {
     fn call_all(&mut self, requests: Vec<T>) -> Box<Future<Item = Vec<U>, Error = E>> {
         if requests.is_empty() {
@@ -179,7 +175,7 @@ impl<T: 'static, U: 'static, E: 'static> MultiCall<T, U, E> for kabuki::ActorRef
 
 pub struct StreamConsumerActorFeeder<S: 'static, A: 'static>
     where S: Stream,
-          A: Actor<Request = S::Item, Response = kabuki::TailCall<S::Item, ()>, Error = S::Error>,
+          A: Actor<Request = S::Item, Response = TailCall<S::Item, ()>, Error = S::Error>,
 {
     stream: Option<S>,
     processing: Vec<Option<<A::Future as IntoFuture>::Future>>,
@@ -188,7 +184,7 @@ pub struct StreamConsumerActorFeeder<S: 'static, A: 'static>
 
 impl<S: 'static, A: 'static> StreamConsumerActorFeeder<S, A>
     where S: Stream,
-          A: Actor<Request = S::Item, Response = kabuki::TailCall<S::Item, ()>, Error = S::Error>,
+          A: Actor<Request = S::Item, Response = TailCall<S::Item, ()>, Error = S::Error>,
 {
     pub fn new(stream: S, actor: A) -> Self {
         StreamConsumerActorFeeder {
@@ -237,9 +233,9 @@ impl<S: 'static, A: 'static> StreamConsumerActorFeeder<S, A>
 
 fn poll_future_in_place<A>(actor: &mut A, fut_opt: &mut Option<<A::Future as IntoFuture>::Future>)
                            -> Result<bool, A::Error>
-    where A: Actor<Response = kabuki::TailCall<<A as Actor>::Request, ()>>,
+    where A: Actor<Response = TailCall<<A as Actor>::Request, ()>>,
 {
-    use kabuki::TailCall::*;
+    use TailCall::*;
     loop {
         match fut_opt.as_mut().map(Future::poll) {
             None |
@@ -263,10 +259,10 @@ fn poll_future_in_place<A>(actor: &mut A, fut_opt: &mut Option<<A::Future as Int
 impl<S: 'static, A: 'static> Actor for StreamConsumerActorFeeder<S, A>
     where S: Stream,
           S::Error: fmt::Debug,
-          A: Actor<Request = S::Item, Response = kabuki::TailCall<S::Item, ()>, Error = S::Error>,
+          A: Actor<Request = S::Item, Response = TailCall<S::Item, ()>, Error = S::Error>,
 {
     type Request = S::Item;
-    type Response = kabuki::TailCall<S::Item, ()>;
+    type Response = TailCall<S::Item, ()>;
     type Error = S::Error;
     type Future = A::Future;
 
@@ -274,7 +270,7 @@ impl<S: 'static, A: 'static> Actor for StreamConsumerActorFeeder<S, A>
         self.actor.call(req)
     }
 
-    fn poll(&mut self, state: kabuki::ActorState) -> Async<()> {
+    fn poll(&mut self, state: ActorState) -> Async<()> {
         let _: Result<(), ()> = self.try_poll()
             .log_to_stderr("XXX poll_complete broke");
         least_ready(least_ready(self.done_processing(), ready_to_end(state)), self.actor.poll(state))
@@ -307,10 +303,10 @@ impl<T> SelfCall<T> {
         SelfCall { call: Some(x) }
     }
 
-    pub fn into_tail_call(self) -> kabuki::TailCall<T, ()> {
+    pub fn into_tail_call(self) -> TailCall<T, ()> {
         match self.call {
-            Some(c) => kabuki::TailCall::Call(c),
-            None => kabuki::TailCall::Complete(()),
+            Some(c) => TailCall::Call(c),
+            None => TailCall::Complete(()),
         }
     }
 }
@@ -427,7 +423,7 @@ impl<A: 'static> Actor for ResponseQueueActor<A>
     where A: Actor<Response = ActorSC<A>>,
 {
     type Request = A::Request;
-    type Response = kabuki::TailCall<A::Request, ()>;
+    type Response = TailCall<A::Request, ()>;
     type Error = A::Error;
     type Future = Box<Future<Item = Self::Response, Error = A::Error>>;
 
@@ -440,7 +436,7 @@ impl<A: 'static> Actor for ResponseQueueActor<A>
         })
     }
 
-    fn poll(&mut self, state: kabuki::ActorState) -> Async<()> {
+    fn poll(&mut self, state: ActorState) -> Async<()> {
         self.actor.poll(state)
     }
 
@@ -448,5 +444,3 @@ impl<A: 'static> Actor for ResponseQueueActor<A>
         self.actor.poll_ready()
     }
 }
-
-fn main() {}

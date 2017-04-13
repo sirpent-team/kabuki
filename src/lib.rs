@@ -16,7 +16,7 @@
 //! lightweight task primitive. However, it leaves the details of managing
 //! concurrency up to the developer.
 
-#![deny(missing_docs)]
+//#![deny(missing_docs)]
 
 // TODO:
 // - Use UnparkEvent once in-flight passes some threshold
@@ -28,6 +28,8 @@ extern crate futures_mpsc;
 #[macro_use]
 extern crate scoped_tls;
 extern crate tokio_core;
+
+pub mod extras;
 
 use futures::{Future, Stream, IntoFuture, Async, AsyncSink, Sink, Poll};
 use futures::sync::oneshot;
